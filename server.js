@@ -11,7 +11,7 @@ const PORT = process.env.PORT || 3000;
 const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
 const MAX_FILE_MB = Number(process.env.MAX_FILE_MB || 500);
 
-app.use(cors({ origin: CORS_ORIGIN }));
+app.use(cors()); // Allow all origins
 app.use(express.json({ limit: '1mb' }));
 
 // Multer: save each uploaded file using its fieldname as filename inside a per-request tmpdir
