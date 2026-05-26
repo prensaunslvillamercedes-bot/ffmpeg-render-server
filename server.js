@@ -58,14 +58,11 @@ app.post('/render/reel', upload.any(), async (req, res) => {
 
     const resolvedArgs = resolveArgs(args, tmpDir, outputName);
 
-    // Log truncated to avoid flooding
     console.log('[render/reel] ffmpeg', resolvedArgs.join(' ').slice(0, 400));
 
     await new Promise((resolve, reject) => {
-      // -threads 1 reduces memory usage on free tier (512MB RAM)
       const ff = spawn('ffmpeg', ['-y', '-threads', '2', ...resolvedArgs], { cwd: tmpDir });
 
-      // Limit stderr buffer to prevent OOM — FFmpeg logs thousands of lines for long videos
       let stderr = '';
       ff.stderr.on('data', d => {
         const chunk = d.toString();
@@ -109,11 +106,9 @@ app.post('/render/reel', upload.any(), async (req, res) => {
 
 app.get('/health', (req, res) => res.json({ ok: true, uptime: process.uptime() }));
 
-// Global error handlers to prevent crashes from killing the server
 process.on('uncaughtException', err => console.error('[uncaughtException]', err.message));
 process.on('unhandledRejection', err => console.error('[unhandledRejection]', err));
 
 app.listen(PORT, () => {
   console.log(`FFmpeg render server on port ${PORT}`);
 });
-
