@@ -8,13 +8,11 @@ import cors from 'cors';
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
-const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
 const MAX_FILE_MB = Number(process.env.MAX_FILE_MB || 500);
 
 app.use(cors()); // Allow all origins
 app.use(express.json({ limit: '1mb' }));
 
-// Multer: save each uploaded file using its fieldname as filename inside a per-request tmpdir
 const storage = multer.diskStorage({
   destination(req, file, cb) {
     if (!req._tmpDir) {
@@ -23,7 +21,6 @@ const storage = multer.diskStorage({
     cb(null, req._tmpDir);
   },
   filename(req, file, cb) {
-    // Use the field name as the file name so FFmpeg args can reference it directly
     cb(null, file.fieldname);
   },
 });
@@ -33,7 +30,6 @@ const upload = multer({
   limits: { fileSize: MAX_FILE_MB * 1024 * 1024 },
 });
 
-// Helper: resolve bare filenames in FFmpeg args to absolute paths inside tmpDir
 function resolveArgs(args, tmpDir, outputName) {
   return args.map(arg => {
     if (typeof arg !== 'string') return String(arg);
@@ -44,7 +40,6 @@ function resolveArgs(args, tmpDir, outputName) {
   });
 }
 
-// ── Main render endpoint ──────────────────────────────────────────────────────
 app.post('/render/reel', upload.any(), async (req, res) => {
   const tmpDir = req._tmpDir;
   if (!tmpDir) return res.status(400).json({ error: 'No files received' });
@@ -63,16 +58,25 @@ app.post('/render/reel', upload.any(), async (req, res) => {
 
     const resolvedArgs = resolveArgs(args, tmpDir, outputName);
 
-    console.log('[render/reel] ffmpeg', resolvedArgs.join(' ').slice(0, 300));
+    // Log truncated to avoid flooding
+    console.log('[render/reel] ffmpeg', resolvedArgs.join(' ').slice(0, 400));
 
     await new Promise((resolve, reject) => {
-      const ff = spawn('ffmpeg', ['-y', ...resolvedArgs], { cwd: tmpDir });
+      // -threads 1 reduces memory usage on free tier (512MB RAM)
+      const ff = spawn('ffmpeg', ['-y', '-threads', '2', ...resolvedArgs], { cwd: tmpDir });
+
+      // Limit stderr buffer to prevent OOM — FFmpeg logs thousands of lines for long videos
       let stderr = '';
-      ff.stderr.on('data', d => { stderr += d.toString(); });
+      ff.stderr.on('data', d => {
+        const chunk = d.toString();
+        stderr += chunk;
+        if (stderr.length > 8000) stderr = '…' + stderr.slice(-7500);
+      });
+
       ff.on('error', reject);
       ff.on('close', code => {
         if (code !== 0) {
-          reject(new Error(`FFmpeg exited ${code}: ${stderr.slice(-2000)}`));
+          reject(new Error(`FFmpeg error (code ${code}): ${stderr.slice(-1500)}`));
         } else {
           resolve();
         }
@@ -96,18 +100,20 @@ app.post('/render/reel', upload.any(), async (req, res) => {
 
   } catch (err) {
     cleanup();
-    console.error('[render/reel error]', err.message);
+    console.error('[render/reel error]', err.message.slice(0, 500));
     if (!res.headersSent) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: err.message.slice(0, 500) });
     }
   }
 });
 
-// ── Health check ──────────────────────────────────────────────────────────────
 app.get('/health', (req, res) => res.json({ ok: true, uptime: process.uptime() }));
 
+// Global error handlers to prevent crashes from killing the server
+process.on('uncaughtException', err => console.error('[uncaughtException]', err.message));
+process.on('unhandledRejection', err => console.error('[unhandledRejection]', err));
+
 app.listen(PORT, () => {
-  console.log(`FFmpeg render server listening on port ${PORT}`);
-  console.log(`  CORS origin : ${CORS_ORIGIN}`);
-  console.log(`  Max file    : ${MAX_FILE_MB} MB`);
+  console.log(`FFmpeg render server on port ${PORT}`);
 });
+
