@@ -10,13 +10,15 @@ const app  = express();
 const PORT = process.env.PORT || 3000;
 const MAX_FILE_MB = Number(process.env.MAX_FILE_MB || 500);
 
-app.use(cors()); // Allow all origins
+const TMPBASE = fs.existsSync('/var/tmp') ? '/var/tmp' : os.tmpdir();
+
+app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 
 const storage = multer.diskStorage({
   destination(req, file, cb) {
     if (!req._tmpDir) {
-      req._tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'reel-'));
+      req._tmpDir = fs.mkdtempSync(path.join(TMPBASE, 'reel-'));
     }
     cb(null, req._tmpDir);
   },
@@ -51,6 +53,8 @@ app.post('/render/reel', upload.any(), async (req, res) => {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
   };
 
+  res.on('close', cleanup);
+
   try {
     const args       = JSON.parse(req.body?.args || '[]');
     const outputName = String(req.body?.outputName || 'output.mp4');
@@ -58,10 +62,10 @@ app.post('/render/reel', upload.any(), async (req, res) => {
 
     const resolvedArgs = resolveArgs(args, tmpDir, outputName);
 
-    console.log('[render/reel] ffmpeg', resolvedArgs.join(' ').slice(0, 400));
+    console.log('[render/reel] tmpDir:', tmpDir, '| ffmpeg', resolvedArgs.join(' ').slice(0, 400));
 
     await new Promise((resolve, reject) => {
-      const ff = spawn('ffmpeg', ['-y', '-threads', '2', ...resolvedArgs], { cwd: tmpDir });
+      const ff = spawn('ffmpeg', ['-y', '-threads', '1', ...resolvedArgs], { cwd: tmpDir });
 
       let stderr = '';
       ff.stderr.on('data', d => {
@@ -91,9 +95,8 @@ app.post('/render/reel', upload.any(), async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
 
     const stream = fs.createReadStream(outputPath);
+    stream.on('error', () => { cleanup(); res.destroy(); });
     stream.pipe(res);
-    stream.on('finish', () => setTimeout(cleanup, 2000));
-    stream.on('error', () => { cleanup(); res.end(); });
 
   } catch (err) {
     cleanup();
@@ -104,11 +107,12 @@ app.post('/render/reel', upload.any(), async (req, res) => {
   }
 });
 
-app.get('/health', (req, res) => res.json({ ok: true, uptime: process.uptime() }));
+app.get('/health', (req, res) => res.json({ ok: true, uptime: process.uptime(), tmpbase: TMPBASE }));
 
 process.on('uncaughtException', err => console.error('[uncaughtException]', err.message));
 process.on('unhandledRejection', err => console.error('[unhandledRejection]', err));
 
 app.listen(PORT, () => {
   console.log(`FFmpeg render server on port ${PORT}`);
+  console.log(`  tmpbase: ${TMPBASE}`);
 });
